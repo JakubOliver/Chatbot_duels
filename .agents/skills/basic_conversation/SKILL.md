@@ -7,8 +7,8 @@ description: Run a supervised roleplay conversation between two agents (default:
 
 This skill orchestrates a roleplay conversation between **two subagents**. The
 **calling agent** (you) acts as the *supervisor*: you spawn both agents, relay
-each speaker's message to the other, enforce the exchange limit, and capture
-the whole conversation in a JSON file.
+each speaker's message to the other, enforce the naturalness rules and the
+exchange limit, and capture the whole conversation in a JSON file.
 
 Default scenario: **a nurse in a hospital** talks with **an elderly lady**
 about the lady's health problem.
@@ -29,7 +29,33 @@ user specifies otherwise):
 
 One **exchange** = one speaker's single message.
 
-## Step 2 — Spawn the two agents
+## Step 2 — Naturalness rules (CRITICAL)
+
+Spoken conversation is short, messy, and reactive. Enforce these rules for
+**every** message from both agents:
+
+1. **Length: 1–3 sentences, max 40 words.** This is a hard cap. A typical
+   turn is one short sentence; three sentences is already a long outburst.
+2. **One question per turn, max.** The nurse asks a single question and
+   waits. Never stack multiple questions in one turn.
+3. **Answer only the latest thing.** Never respond to every point the other
+   speaker made. React to one thing — the most recent, the most emotional,
+   or the most surprising — and let the rest go. It is natural and realistic
+   for a speaker to ignore some questions.
+4. **Sound spoken, not written:**
+   - Contractions everywhere (`I'm`, `don't`, `that's`).
+   - Short fragments are fine (`Oh dear.`, `Hmm, no.`, `Since Tuesday, maybe?`).
+   - Hesitations and fillers (`well`, `oh`, `let me think`, `erm`).
+   - Incomplete or trailing sentences are fine (`So I thought... never mind.`).
+   - Simple everyday vocabulary, no medical jargon from the nurse unless she
+     immediately explains it in plain words.
+5. **React before answering.** A natural turn often opens with a short
+   emotional reaction (`Oh, love.`, `That doesn't sound fun.`) before any
+   content.
+6. **No narration, no stage directions.** Only the words the character
+   actually says out loud.
+
+## Step 3 — Spawn the two agents
 
 Spawn each persona as a separate `general` subagent. Keep both `sessionID`s —
 you will reuse them to continue each side of the conversation.
@@ -37,12 +63,17 @@ you will reuse them to continue each side of the conversation.
 **Persona A — Nurse (spawn prompt template):**
 
 ```
-You are roleplaying as a nurse working in a busy city hospital. You are kind,
-patient, and professional. You speak in short, natural sentences and ask
-follow-up questions to understand the patient's problem. You never break
-character and never mention being an AI. When given a message from the
-patient, reply with EXACTLY ONE message as the nurse (no preamble, no
-narration, no quotation marks around your reply).
+You are roleplaying as a nurse in a busy city hospital. You are kind, patient
+and professional. You talk like a real person speaks: contractions, short
+everyday words, no jargon unless you explain it.
+
+STRICT RULES for every reply:
+- EXACTLY ONE message per turn: 1-3 short sentences, never more than 40 words.
+- Ask at most ONE question per turn, then stop and wait.
+- React to one thing the patient said — do not address every point.
+- You never break character and never mention being an AI.
+- Output only the words you say out loud: no narration, no quotation marks,
+  no preamble.
 ```
 
 **Persona B — Old lady (spawn prompt template):**
@@ -50,26 +81,33 @@ narration, no quotation marks around your reply).
 ```
 You are roleplaying as an elderly lady, aged 70+, visiting a hospital. You
 have a health problem that bothers you — invent one plausible, non-emergency
-problem (for example: dizzy spells, trouble sleeping, knee pain) and describe
-it in your own words. You are a bit chatty, sometimes wander off topic, and
-speak warmly and casually. You never break character and never mention being
-an AI. When given a message from the nurse, reply with EXACTLY ONE message as
-the lady (no preamble, no narration, no quotation marks around your reply).
+problem (for example: dizzy spells, trouble sleeping, knee pain). You are warm
+and a bit chatty, but you still speak like a real person: short bursts,
+fillers ("well", "oh", "dear"), and the occasional ramble that you break off.
+
+STRICT RULES for every reply:
+- EXACTLY ONE message per turn: 1-3 short sentences, never more than 40 words.
+- Respond to the latest thing the nurse said. It is fine to skip or half-answer
+  a question — do not answer everything at once.
+- You never break character and never mention being an AI.
+- Output only the words you say out loud: no narration, no quotation marks,
+  no preamble.
 ```
 
 For the **first turn only**, append to the old lady's prompt:
 
 ```
-Start the conversation yourself: greet the nurse and describe your problem.
+Start the conversation yourself: greet the nurse and mention your problem in
+2-3 short sentences. Do not describe everything yet — let the nurse ask.
 ```
 
-## Step 3 — Run the supervised conversation loop
+## Step 4 — Run the supervised conversation loop
 
-1. Ask persona B (old lady) for the opening message (see Step 2).
-2. Record her message (Step 4).
+1. Ask persona B (old lady) for the opening message (see Step 3).
+2. Validate her message (Step 5), then record it (Step 6).
 3. Send her message to persona A (nurse) by continuing its session — prompt:
    `The patient says: "<message>". Reply as the nurse.`
-4. Record the nurse's reply (Step 4).
+4. Validate and record the nurse's reply.
 5. Send the nurse's reply back to persona B — prompt:
    `The nurse says: "<message>". Reply as the old lady.`
 6. Repeat steps 3–5, alternating speakers.
@@ -83,13 +121,38 @@ Supervision rules:
 - **End early only** if both sides have clearly finished (e.g. the nurse
   wrapped up with clear advice and the lady said goodbye) AND at least the
   minimum number of exchanges (default 5) has been reached.
-- If an agent breaks character or returns narration instead of a message,
-  re-prompt it once with `Reply only with your character's single message.`
+- **Pace the arc.** Roughly: first third — problem surfaces; middle — back
+  and forth questions, details, small tangents; last third — the nurse gives
+  advice and they say goodbye.
 
-## Step 4 — Capture the conversation as JSON
+## Step 5 — Validate every message (naturalness gate)
+
+After each agent's reply, check it against the Step 2 rules:
+
+- [ ] 1–3 sentences and ≤ 40 words
+- [ ] At most one question
+- [ ] Sounds spoken (contractions / fragments / fillers present or at least
+      nothing bookish)
+- [ ] No narration or stage directions
+
+If a message fails, re-prompt that agent **once** with specific feedback, e.g.:
+
+```
+That reply was too long / asked too many questions / read like writing.
+Say it again as one spoken turn: 1-3 short sentences, at most 40 words, at
+most one question. Only the words you say out loud.
+```
+
+If the retry still fails, accept the shorter of the two replies and continue
+— do not loop forever. Track how many re-prompts were needed and note it in
+the final JSON.
+
+## Step 6 — Capture the conversation as JSON
 
 Maintain the transcript after every exchange and write it to the output file
 (updating it incrementally is fine so a partial log survives an interruption).
+Append the new transcript entry in the same edit as updating `exchange_count`
+— never let the counter and the transcript get out of sync.
 
 **JSON schema:**
 
@@ -103,6 +166,10 @@ Maintain the transcript after every exchange and write it to the output file
   "started_at": "<ISO 8601 timestamp>",
   "finished_at": "<ISO 8601 timestamp>",
   "exchange_count": 0,
+  "naturalness": {
+    "max_words_per_message": 40,
+    "reprompts_needed": 0
+  },
   "transcript": [
     {
       "exchange": 1,
@@ -113,7 +180,7 @@ Maintain the transcript after every exchange and write it to the output file
 }
 ```
 
-**Example (abbreviated):**
+**Example (abbreviated, realistic length):**
 
 ```json
 {
@@ -124,27 +191,32 @@ Maintain the transcript after every exchange and write it to the output file
   },
   "started_at": "2026-10-16T18:30:00",
   "finished_at": "2026-10-16T18:34:12",
-  "exchange_count": 6,
+  "exchange_count": 8,
+  "naturalness": {
+    "max_words_per_message": 40,
+    "reprompts_needed": 1
+  },
   "transcript": [
     {
       "exchange": 1,
       "speaker": "old_lady",
-      "message": "Good morning, dear. I hope you have a moment... lately I get so dizzy when I stand up in the morning."
+      "message": "Morning, dear. I keep getting dizzy when I stand up. Room just spins."
     },
     {
       "exchange": 2,
       "speaker": "nurse",
-      "message": "Good morning! Of course, take your time. When did the dizziness start, and does anything make it better or worse?"
+      "message": "Oh, that doesn't sound fun. When did it start?"
     }
   ]
 }
 ```
 
-## Step 5 — Report
+## Step 7 — Report
 
 When the conversation is finished:
 
 1. Write the final JSON to the output file.
-2. Report to the user: the number of exchanges, a one-sentence summary of
-   what the lady's problem was and how the conversation ended, and the path
-   to the JSON file.
+2. Report to the user: the number of exchanges, the average and max words per
+   message, how many re-prompts were needed, a one-sentence summary of what
+   the lady's problem was and how the conversation ended, and the path to the
+   JSON file.
